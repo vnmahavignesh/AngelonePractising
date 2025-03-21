@@ -1,4 +1,4 @@
-# AngelonePractising
+# Angelone Pre-requisites
 Step 1: Install VS Code
 Step 2: Install Python -> check python Version python --version
 Step 3: Install Pandas -> pip install pandas
