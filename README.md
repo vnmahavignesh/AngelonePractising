@@ -12,3 +12,4 @@ Step 10: Activate the venv -> .\myenv\Scripts\activate after activation you coul
 Step 11: To Visualise our values -> pip install matplotlib
 Step 12: For Excel read nad write -> pip install XlsxWriter using excel library 
 Step 13: For Excel read nad write -> pip install openpyxl using pandas library 
+Step 14: For creating .env file -> pip install python-dotenv
