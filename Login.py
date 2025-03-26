@@ -1,67 +1,147 @@
 import os
-import json
 import pyotp
+import pandas as pd
+from dotenv import load_dotenv
 from SmartApi.smartConnect import SmartConnect
+from abc import ABC, abstractmethod
+from typing import Dict, Optional, Any
 
-class LoginManager:
-    CREDENTIAL_FILE = "angelone_login_credential.json"
+
+class CredentialsManager:
+    """Handles loading and managing credentials from environment variables"""
 
     def __init__(self):
-        self.credentials = self._load_or_create_credentials()
-        self.smart_connect_obj = None
-        self.refresh_token = None
+        load_dotenv()  # Load environment variables from .env file
 
-    def _load_or_create_credentials(self):
+    def get_api_key(self) -> str:
+        return os.getenv('API_KEY')
+
+    def get_username(self) -> str:
+        return os.getenv('USERNAME')
+
+    def get_pin(self) -> str:
+        return os.getenv('PIN')
+
+    def get_totp_token(self) -> str:
+        return os.getenv('TOTP_TOKEN')
+
+
+class Authenticator(ABC):
+    """Abstract base class for authentication"""
+
+    @abstractmethod
+    def authenticate(self) -> Dict[str, Any]:
+        pass
+
+
+class SmartApiAuthenticator(Authenticator):
+    """Concrete implementation for Smart API authentication"""
+
+    def __init__(self, credentials_manager: CredentialsManager):
+        self.credentials = credentials_manager
+        self.smart_connect = None
+
+    def generate_totp(self) -> str:
+        """Generate Time-based One-Time Password"""
+        return pyotp.TOTP(self.credentials.get_totp_token()).now()
+
+    def authenticate(self) -> Dict[str, Any]:
+        """Authenticate with Smart API"""
         try:
-            # Try to load credentials from the file
-            with open(self.CREDENTIAL_FILE, "r") as f:
-                credentials = json.load(f)
-            # Ensure all required keys are present
-            required_keys = ["api_key", "username", "pin", "totp_key"]
-            for key in required_keys:
-                if key not in credentials:
-                    raise KeyError(f"Missing key in credentials: {key}")
-        except (FileNotFoundError, KeyError):
-            # If the file doesn't exist or keys are missing, prompt the user for credentials
-            print("-----Enter your Login Credentials-----")
-            credentials = {
-                "api_key": str(input("Enter Your API Key: ")).strip(),
-                "username": str(input("Enter Your Username: ")).strip(),
-                "pin": str(input("Enter Your PIN: ")).strip(),
-                "totp_key": str(input("Enter Your TOTP Key: ")).strip()
+            api_key = self.credentials.get_api_key()
+            username = self.credentials.get_username()
+            pin = self.credentials.get_pin()
+            totp = self.generate_totp()
+
+            self.smart_connect = SmartConnect(api_key)
+            session_data = self.smart_connect.generateSession(username, pin, totp)
+
+            return {
+                'status': 'success',
+                'data': session_data,
+                'message': 'Authentication successful',
+                'connection': self.smart_connect  # Return the connection object
             }
-            # Ask the user if they want to save the credentials
-            if input("Press Y to save Login Credential and any key to bypass: ").upper() == 'Y':
-                with open(self.CREDENTIAL_FILE, "w") as f:
-                    json.dump(credentials, f)
-                print(f"'{self.CREDENTIAL_FILE}' saved successfully")
-            else:
-                print(f"'{self.CREDENTIAL_FILE}' Cancelled!!!!!")
-        return credentials
-
-    def login(self):
-        try:
-            self.smart_connect_obj = SmartConnect(api_key=self.credentials["api_key"])
-            data = self.smart_connect_obj.generateSession(
-                self.credentials["username"],
-                self.credentials["pin"],
-                pyotp.TOTP(self.credentials["totp_key"]).now()            
-            )
-
-            if 'data' not in data:
-                raise Exception("Failed to generate session. Response: " + str(data))
-
-            self.refresh_token = data['data']['refreshToken']
-            res = self.smart_connect_obj.getProfile(self.refresh_token)
-            print('------------Login Successful------------')
-            print(res)           
-            return True  # Login successful
         except Exception as e:
-            print(f"Error: {e}")
-            return False  # Login failed
+            return {
+                'status': 'error',
+                'data': None,
+                'message': str(e),
+                'connection': None
+            }
 
-    def get_smart_connect_obj(self):
-        return self.smart_connect_obj
 
-    def get_refresh_token(self):
-        return self.refresh_token
+class SessionDataHandler:
+    """Handles processing and formatting of session data"""
+
+    @staticmethod
+    def to_dataframe(session_data: Dict[str, Any]) -> pd.DataFrame:
+        """Convert session data to pandas DataFrame"""
+        return pd.DataFrame([session_data['data']]) if session_data['status'] == 'success' else pd.DataFrame()
+
+    @staticmethod
+    def get_token(session_data: Dict[str, Any], token_name: str) -> Optional[str]:
+        """Extract specified token from session data"""
+        if session_data['status'] == 'success':
+            return session_data['data'].get(token_name)
+        return None
+
+    @staticmethod
+    def display(session_data: Dict[str, Any]) -> None:
+        """Display session data in a user-friendly format"""
+        if session_data['status'] == 'success':
+            df = SessionDataHandler.to_dataframe(session_data)
+            print("Authentication Successful!")
+            print(df)
+        else:
+            print(f"Authentication Failed: {session_data['message']}")
+
+
+class OrderManager:
+    """Handles order placement and management"""
+    
+    def __init__(self, smart_connect: SmartConnect):
+        self.smart_connect = smart_connect
+    
+    def place_order(self, order_params: Dict[str, Any]) -> Dict[str, Any]:
+        """Place an order and return both order ID and full response"""
+        try:
+            # SmartConnect.placeOrder
+            # order_id = self.smart_connect.placeOrder(order_params)
+            full_response = self.smart_connect.placeOrderFullResponse(order_params)
+            
+            return {
+                'status': 'success',
+                # 'order_id': order_id,
+                'full_response': full_response,
+                'message': 'Order placed successfully'
+            }
+        except Exception as e:
+            return {
+                'status': 'error',
+                'order_id': None,
+                'full_response': None,
+                'message': str(e)
+            }
+
+
+class LoginManager:
+    """Main class to coordinate the login process"""
+
+    def __init__(self):
+        self.credentials_manager = CredentialsManager()
+        self.authenticator = SmartApiAuthenticator(self.credentials_manager)
+        self.order_manager = None
+
+    def login(self) -> Dict[str, Any]:
+        """Execute the login process and return session data"""
+        session_data = self.authenticator.authenticate()
+        
+        if session_data['status'] == 'success' and session_data['connection']:
+            self.order_manager = OrderManager(session_data['connection'])
+        
+        return session_data
+    
+    def get_order_manager(self) -> Optional[OrderManager]:
+        """Get the order manager instance if authenticated"""
+        return self.order_manager
